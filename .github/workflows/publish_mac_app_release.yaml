@@ -1,0 +1,91 @@
+name: mac-app-build-action
+# 推送Tag时触发
+on:
+  workflow_dispatch:
+jobs:
+  build-mac-app: # 作业名称修改为更具体
+    runs-on: macos-latest
+    permissions:
+      contents: write # 需要写入权限来创建 Release
+    steps:
+      # 签出代码
+      - uses: actions/checkout@v4
+        # 注意：如果你的版本信息或代码在 master 分支，这里保持 ref: master 是对的
+        # 如果版本信息随 tag 走，可以移除 ref: master，让 action 自动签出触发的 tag
+        with:
+          ref: master # 或者移除这行，签出触发事件的 tag
+
+      # 设置Flutter
+      - name: Flutter action
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.x' # 保持与原配置一致的Flutter版本
+          cache: true
+
+      # 打开MAC Desktop支持
+      - name: Enable Flutter Desktop
+        run: flutter config --enable-macos-desktop
+
+      # 更新Flutter的packages
+      - name: Restore packages
+        # 假设你的 flutter 项目在 simple_live_app 目录下
+        run: |
+          cd simple_live_app
+          flutter pub get
+
+      # 安装 appdmg (用于 flutter_distributor 打包 dmg)
+      - name: Install appdmg
+        run: npm install -g appdmg
+
+      # 设置 flutter_distributor 环境
+      - name: Install flutter_distributor
+        run: dart pub global activate flutter_distributor
+
+      # 打包MAC
+      - name: Build MacOS
+        run: |
+          cd simple_live_app
+          flutter_distributor package --platform macos --targets dmg,zip --skip-clean
+
+      # 上传MAC构建产物至Artifacts (方便调试或检查)
+      - name: Upload MacOS Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-build-output # Artifact 名称
+          path: |
+            simple_live_app/build/dist/*/*.dmg
+            simple_live_app/build/dist/*/*.zip
+
+      # 读取版本信息 (假设版本文件在仓库根目录下的 assets/app_version.json)
+      # 如果文件在 simple_live_app 下，路径应为 simple_live_app/assets/app_version.json
+      - name: Read version
+        id: version
+        uses: juliangruber/read-file-action@v1
+        with:
+          # 根据实际情况修改路径
+          path: simple_live_app/assets/app_version.json # 确认文件路径
+
+      - name: Echo version info (for debugging)
+        run: |
+          echo "Version: ${{ fromJson(steps.version.outputs.content).version }}"
+          echo "Prerelease: ${{ fromJson(steps.version.outputs.content).prerelease }}"
+          echo "Description: ${{ fromJson(steps.version.outputs.content).version_desc }}"
+
+
+      # 上传至Release
+      - name: Upload MacOS Release Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          # 使用从文件中读取的版本信息
+          name: "Release ${{ fromJson(steps.version.outputs.content).version }}"
+          body: "${{ fromJson(steps.version.outputs.content).version_desc }}"
+          prerelease: ${{ fromJson(steps.version.outputs.content).prerelease }}
+          token: ${{ secrets.TOKEN }} # 确保你的仓库有这个名为 TOKEN 的 secret
+          # 只上传 macOS 的构建产物
+          files: |
+            simple_live_app/build/dist/*/*.dmg
+            simple_live_app/build/dist/*/*.zip
+
+      # 完成
+      - name: Job Completion Status
+        run: echo "🍏 MacOS build job finished with status ${{ job.status }}."
